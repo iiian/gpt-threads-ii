@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import Message from './Message';
 import ChatInput from './ChatInput';
+import Message from './Message';
 
 export default function Thread({
   thread,
@@ -14,7 +14,8 @@ export default function Thread({
   focusInput,
   onInputFocus,
   prefillText,
-  prefillStamp
+  prefillStamp,
+  swipeHint
 }) {
   const messagesEndRef = useRef(null);
   const [justSentMessage, setJustSentMessage] = useState(false);
@@ -93,6 +94,10 @@ export default function Thread({
 
         <div ref={messagesEndRef} />
       </div>
+
+      {swipeHint && (
+        <div className="swipe-hint inline">← Swipe to switch threads →</div>
+      )}
 
       <ChatInput
         threadId={threadId}

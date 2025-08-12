@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { serializeRange, deserializeRange } from '../highlightUtils';
 import Thread from './Thread';
 import SelectionPopover from './SelectionPopover';
@@ -8,7 +8,7 @@ import useThreadStack from '../hooks/useThreadStack';
 import useDemoConversations from '../hooks/useDemoConversations';
 import useDemoMessaging from '../hooks/useDemoMessaging';
 
-export default function DemoChatApp() {
+export default function DemoChatApp({ fullscreen = false }) {
   const {
     conversations,
     activeConversationId,
@@ -38,6 +38,41 @@ export default function DemoChatApp() {
     nextPrefillStamp,
     advanceScriptForUI
   } = useDemoMessaging(conversations, activeConversationId, updateActiveConversation);
+
+  // Detect mobile viewport to decide when to enable the swipe-based layout
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    try {
+      return window.matchMedia('(max-width: 768px)').matches;
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(max-width: 768px)');
+    const onChange = (e) => setIsMobile(e.matches);
+    // Initialize immediately
+    setIsMobile(mq.matches);
+    try {
+      mq.addEventListener('change', onChange);
+      return () => mq.removeEventListener('change', onChange);
+    } catch (err) {
+      // Safari fallback
+      mq.addListener(onChange);
+      return () => mq.removeListener(onChange);
+    }
+  }, []);
+
+  // Controls brief display of the swipe hint after a highlight/thread is created
+  const [showSwipeHint, setShowSwipeHint] = useState(false);
+  const [swipeHintThreadId, setSwipeHintThreadId] = useState(null);
+  const swipeHintTimeoutRef = useRef(null);
+  useEffect(() => {
+    return () => {
+      if (swipeHintTimeoutRef.current) clearTimeout(swipeHintTimeoutRef.current);
+    };
+  }, []);
 
   // Resolve placeholder thread IDs from the script (e.g., 'fork-1', 'latest-fork')
   // to the actual latest thread in the current chat stack (the rightmost column).
@@ -203,6 +238,12 @@ export default function DemoChatApp() {
     // into this newly created fork, then prepare the next user prefill.
     // Steps to skip: highlight_create, discuss_click
     advanceScriptForUI?.(new Set(['highlight_create', 'discuss_click']), { latestThreadId: newThreadId });
+
+    // Briefly show the swipe hint (max 3s) once a highlight/thread is established
+    if (swipeHintTimeoutRef.current) clearTimeout(swipeHintTimeoutRef.current);
+    setShowSwipeHint(true);
+    setSwipeHintThreadId(newThreadId);
+    swipeHintTimeoutRef.current = setTimeout(() => setShowSwipeHint(false), 3000);
   }
 
   function deleteHighlight(highlightId) {
@@ -260,11 +301,11 @@ export default function DemoChatApp() {
 
   return (
     <div
-      className="demo-embed"
+      className={`demo-embed ${fullscreen && isMobile ? 'mobile-demo' : ''}`}
       style={{
-        height: 560,
-        border: '1px solid #22252c',
-        borderRadius: 8,
+        height: fullscreen ? '100vh' : 560,
+        border: fullscreen ? 'none' : '1px solid #22252c',
+        borderRadius: fullscreen ? 0 : 8,
         background: '#0d0e12',
         overflow: 'hidden'
       }}
@@ -289,6 +330,7 @@ export default function DemoChatApp() {
               onInputFocus={scrollToThread}
               prefillText={resolvePrefillThreadId(nextPrefill?.threadId) === threadId ? nextPrefill?.text : undefined}
               prefillStamp={resolvePrefillThreadId(nextPrefill?.threadId) === threadId ? nextPrefillStamp : 0}
+              swipeHint={fullscreen && showSwipeHint && chatStack.length > 1 && threadId === swipeHintThreadId}
             />
           );
         })}
@@ -299,7 +341,6 @@ export default function DemoChatApp() {
           </div>
         )}
       </div>
-
       <SelectionPopover
         selectionPopover={selectionPopover}
         onDiscuss={forkConversation}

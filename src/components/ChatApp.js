@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { serializeRange, deserializeRange } from '../highlightUtils';
 import Thread from './Thread';
 import Sidebar from './Sidebar';
@@ -25,6 +25,7 @@ export default function ChatApp() {
     chatStack,
     setChatStack,
     focusThreadId,
+    setFocusThreadId,
     chatStackRef,
     closeThread,
     scrollToThread,
@@ -32,10 +33,13 @@ export default function ChatApp() {
     resetToRoot
   } = useThreadStack();
 
+  // Model selection: 'claude' or 'openai'
+  const [selectedModel, setSelectedModel] = useState('claude');
+
   const {
     isLoading,
     sendMessage
-  } = useMessaging(conversations, activeConversationId, updateActiveConversation);
+  } = useMessaging(conversations, activeConversationId, updateActiveConversation, selectedModel);
 
   // Handle conversation selection - reset thread stack to root when selecting
   const handleSelectConversation = (convId) => {
@@ -71,6 +75,24 @@ export default function ChatApp() {
     repaintHighlights,
     handleSelection
   } = useHighlights(activeConversation, handleOpenThreadById, activeConversation?.threads?.[chatStack[chatStack.length - 1]]?.parentHighlightId || null);
+
+  // Quote insertion state (linear reply into an existing thread)
+  const [nextQuote, setNextQuote] = useState(null);
+  const [nextQuoteStamp, setNextQuoteStamp] = useState(0);
+
+  const handleQuoteInsert = (threadId, text) => {
+    if (!threadId || !text || !text.trim()) {
+      console.debug('[Quote] Ignored empty/missing selection (ChatApp)', { threadId, text });
+      return;
+    }
+    console.debug('[Quote] Inserting quote (ChatApp)', { threadId, text });
+    setNextQuote({ threadId, text });
+    setNextQuoteStamp(s => s + 1);
+    setFocusThreadId(threadId);
+    try { document.getSelection()?.removeAllRanges(); } catch {}
+    setSelectionPopover(null);
+    setTimeout(() => scrollToThread(threadId), 0);
+  };
 
   // Fork conversation from highlight
   function forkConversation(threadId, highlightText, range, messageId) {
@@ -236,12 +258,32 @@ export default function ChatApp() {
     setHighlightPopover(null);
   }
 
-  // Main render
-  return (
-    <div className="app">
-      <div className="app-nav">
-        <a href="/demo" className="nav-link">← Back to Demo</a>
+// Main render
+return (
+  <>
+    <div className="app-nav">
+      <a href="/demo" className="nav-link">← Back to Demo</a>
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <label htmlFor="model-select" style={{ fontSize: 12, color: '#64748b' }}>Model</label>
+        <select
+          id="model-select"
+          value={selectedModel}
+          onChange={(e) => setSelectedModel(e.target.value)}
+          style={{
+            fontSize: 12,
+            padding: '4px 6px',
+            borderRadius: 6,
+            border: '1px solid #cbd5e1',
+            background: 'white'
+          }}
+          title="Choose the model to use"
+        >
+          <option value="claude">Claude Opus</option>
+          <option value="openai">GPT-5</option>
+        </select>
       </div>
+    </div>
+    <div className="app">
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
@@ -271,6 +313,9 @@ export default function ChatApp() {
               onClose={closeThread}
               focusInput={shouldFocus}
               onInputFocus={scrollToThread}
+              quoteText={nextQuote?.threadId === threadId ? nextQuote?.text : undefined}
+              quoteStamp={nextQuote?.threadId === threadId ? nextQuoteStamp : 0}
+              selectedModel={selectedModel}
             />
           );
         })}
@@ -285,6 +330,7 @@ export default function ChatApp() {
       <SelectionPopover
         selectionPopover={selectionPopover}
         onDiscuss={forkConversation}
+        onQuote={handleQuoteInsert}
       />
 
       <HighlightPopover
@@ -292,5 +338,7 @@ export default function ChatApp() {
         onDeleteHighlight={deleteHighlight}
       />
     </div>
-  );
+  </>
+);
+
 }

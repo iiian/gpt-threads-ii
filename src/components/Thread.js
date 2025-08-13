@@ -15,6 +15,9 @@ export default function Thread({
   onInputFocus,
   prefillText,
   prefillStamp,
+  quoteText,
+  quoteStamp,
+  selectedModel,
   swipeHint
 }) {
   const messagesEndRef = useRef(null);
@@ -89,7 +92,7 @@ export default function Thread({
         )}
 
         {isLoading && (
-          <div className="loading">Claude is thinking...</div>
+          <div className="loading">{selectedModel === 'openai' ? 'GPT-5' : 'Claude'} is thinking...</div>
         )}
 
         <div ref={messagesEndRef} />
@@ -103,13 +106,16 @@ export default function Thread({
         threadId={threadId}
         isLoading={isLoading}
         onSendMessage={async (tid, message) => {
-          await sendMessage(tid, message);
+          // Scroll immediately on send
           setJustSentMessage(true);
+          await sendMessage(tid, message);
         }}
         focusInput={focusInput}
         onInputFocus={onInputFocus}
         prefillText={prefillText}
         prefillStamp={prefillStamp}
+        quoteText={quoteText}
+        quoteStamp={quoteStamp}
       />
     </div>
   );

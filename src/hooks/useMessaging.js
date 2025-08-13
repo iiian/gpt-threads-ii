@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { callClaudeAPI, callClaudeAPIStream } from '../claudeApi';
+import { callOpenAIAPI, callOpenAIAPIStream } from '../openaiApi';
 import { buildLinearContext } from '../utils/buildLinearContext';
 
-export default function useMessaging(conversations, activeConversationId, updateActiveConversation) {
+export default function useMessaging(conversations, activeConversationId, updateActiveConversation, selectedModel = 'claude') {
   const [isLoading, setIsLoading] = useState({});
   const [pendingNaming, setPendingNaming] = useState(null); // Track which thread needs naming after state update
 
@@ -23,7 +24,8 @@ export default function useMessaging(conversations, activeConversationId, update
         // Filter out any empty-content messages (e.g., placeholder during streaming)
         contextMessages = contextMessages.filter(m => m?.content && String(m.content).trim().length > 0);
         const titlePrompt = 'Propose a short, descriptive conversation title (max 6 words). Return only the title.';
-        const response = await callClaudeAPI([...contextMessages, { role: 'user', content: titlePrompt }]);
+        const callSimple = selectedModel === 'openai' ? callOpenAIAPI : callClaudeAPI;
+        const response = await callSimple([...contextMessages, { role: 'user', content: titlePrompt }]);
         const raw = (response || '').split('\n')[0].trim();
         const cleaned = raw.replace(/^"|"$/g, '').slice(0, 80);
         if (!cleaned) return;
@@ -50,7 +52,7 @@ export default function useMessaging(conversations, activeConversationId, update
         return () => clearTimeout(timer);
       }
     }
-  }, [pendingNaming, conversations, activeConversationId, updateActiveConversation]);
+  }, [pendingNaming, conversations, activeConversationId, updateActiveConversation, selectedModel]);
 
   // Helpers for conversation title generation
   const isDefaultTitle = (title) => {
@@ -58,7 +60,7 @@ export default function useMessaging(conversations, activeConversationId, update
     return title === 'New Conversation' || /^Conversation\s+\d+$/.test(title);
   };
 
-  // Send message to Claude
+  // Send message to selected provider
   const sendMessage = async (threadId, message) => {
     const activeConversation = conversations.find(c => c.id === activeConversationId);
     if (!activeConversation || !message.trim()) return;
@@ -106,7 +108,7 @@ export default function useMessaging(conversations, activeConversationId, update
       };
     });
 
-    // Prepare context for Claude
+    // Prepare context for LLM
     const updatedConvo = conversations.find(c => c.id === activeConversationId);
     const { messages: contextMessages, systemPrompt } = buildLinearContext(updatedConvo, threadId);
     contextMessages.push({ role: 'user', content: message });
@@ -120,8 +122,8 @@ export default function useMessaging(conversations, activeConversationId, update
         [threadId]: {
           ...conv.threads[threadId],
           messages: [
-            ...conv.threads[threadId].messages,
-            { id: placeholderId, role: 'assistant', content: '', timestamp: Date.now() }
+            ...(conv.threads[threadId].messages || []),
+            { id: placeholderId, role: 'assistant', content: '', timestamp: Date.now(), provider: selectedModel }
           ]
         }
       },
@@ -129,7 +131,8 @@ export default function useMessaging(conversations, activeConversationId, update
     }));
 
     try {
-      await callClaudeAPIStream(contextMessages, systemPrompt, {
+      const callStream = selectedModel === 'openai' ? callOpenAIAPIStream : callClaudeAPIStream;
+      await callStream(contextMessages, systemPrompt, {
         onDelta: (delta) => {
           updateActiveConversation(conv => {
             const t = conv.threads[threadId];
@@ -159,8 +162,9 @@ export default function useMessaging(conversations, activeConversationId, update
       const errorMessage = {
         id: `msg-${Date.now()}-error`,
         role: 'assistant',
-        content: `Error: ${error.message}. Please ensure your API key is set in .env.local`,
-        timestamp: Date.now()
+        content: `Error: ${error.message}. Please ensure your API key(s) are set in .env.local`,
+        timestamp: Date.now(),
+        provider: selectedModel
       };
       updateActiveConversation(conv => ({
         ...conv,

@@ -8,7 +8,7 @@ export default function Message({ message, messageRefs }) {
   return (
     <div key={message.id} className="message">
       <div className="message-role">
-        {message.role === 'user' ? 'You' : 'Claude'}
+        {message.role === 'user' ? 'You' : (message.provider === 'openai' ? 'GPT-5' : 'Claude')}
       </div>
       <div
         className={`message-content ${message.role}`}

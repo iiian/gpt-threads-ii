@@ -39,6 +39,9 @@ export default function DemoChatApp({ fullscreen = false }) {
     advanceScriptForUI
   } = useDemoMessaging(conversations, activeConversationId, updateActiveConversation);
 
+  // Container for scoping middle-mouse drag-to-scroll
+  const containerRef = useRef(null);
+
   // Detect mobile viewport to decide when to enable the swipe-based layout
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return false;
@@ -71,6 +74,215 @@ export default function DemoChatApp({ fullscreen = false }) {
   useEffect(() => {
     return () => {
       if (swipeHintTimeoutRef.current) clearTimeout(swipeHintTimeoutRef.current);
+    };
+  }, []);
+
+  // Quote insertion state (linear reply into an existing thread)
+  const [nextQuote, setNextQuote] = useState(null);
+  const [nextQuoteStamp, setNextQuoteStamp] = useState(0);
+
+  const handleQuoteInsert = (threadId, text) => {
+    if (!threadId || !text || !text.trim()) {
+      console.debug('[Quote] Ignored empty/missing selection', { threadId, text });
+      return;
+    }
+    console.debug('[Quote] Inserting quote', { threadId, text });
+    setNextQuote({ threadId, text });
+    setNextQuoteStamp(s => s + 1);
+    setFocusThreadId(threadId);
+    // Clear selection UI
+    try { document.getSelection()?.removeAllRanges(); } catch {}
+    setSelectionPopover(null);
+    // Ensure the thread is in view
+    setTimeout(() => scrollToThread(threadId), 0);
+  };
+
+  // Middle-mouse drag to horizontally scroll the chat stack, even over inputs (Pointer Events)
+  useEffect(() => {
+    const containerEl = containerRef.current;
+    if (!containerEl) return;
+
+    let isPanning = false;
+    let startX = 0;
+    let startScrollLeft = 0;
+    let targetScroller = null;
+    let panPointerId = null;
+    let prevHtmlOverflow = '';
+    let prevBodyOverflow = '';
+    let prevBodyOverscroll = '';
+    let overlayEl = null;
+
+    const withinContainer = (e) => {
+      // Prefer DOM containment; falls back to geometry if target missing
+      if (e && e.target && containerEl.contains(e.target)) return true;
+      const rect = containerEl.getBoundingClientRect();
+      return e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+    };
+
+    const onPointerDown = (e) => {
+      if (e.pointerType !== 'mouse') return;
+      // Middle button detection: primary=0, middle=1, secondary=2. Also allow bitmask for safety.
+      if (e.button !== 1 && !(e.buttons & 4)) return;
+      if (!withinContainer(e)) return;
+      const scroller = chatStackRef.current;
+      if (!scroller) return;
+      isPanning = true;
+      panPointerId = e.pointerId;
+      targetScroller = scroller;
+      startX = e.clientX;
+      startScrollLeft = scroller.scrollLeft;
+      // Capture pointer so moves continue even over inputs/other elements (use original target)
+      try {
+        const captureEl = (e.target && typeof e.target.setPointerCapture === 'function') ? e.target : containerEl;
+        captureEl.setPointerCapture(e.pointerId);
+      } catch {}
+      // Prevent native autoscroll / paste
+      e.preventDefault();
+      document.body.style.cursor = 'grabbing';
+      document.body.style.userSelect = 'none';
+      // Add full-screen overlay to intercept native autoscroll and clicks (helps Firefox)
+      overlayEl = document.createElement('div');
+      Object.assign(overlayEl.style, {
+        position: 'fixed',
+        inset: '0',
+        zIndex: '9999',
+        cursor: 'grabbing',
+        background: 'transparent',
+      });
+      const block = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+      overlayEl.addEventListener('mousedown', block, { capture: true });
+      overlayEl.addEventListener('mouseup', block, { capture: true });
+      overlayEl.addEventListener('click', block, { capture: true });
+      document.body.appendChild(overlayEl);
+      // Lock page scrolling (helps Firefox autoscroll)
+      prevHtmlOverflow = document.documentElement.style.overflow;
+      prevBodyOverflow = document.body.style.overflow;
+      prevBodyOverscroll = document.body.style.overscrollBehavior;
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+      document.body.style.overscrollBehavior = 'none';
+    };
+
+    const onPointerMove = (e) => {
+      if (!isPanning || e.pointerId !== panPointerId || !targetScroller) return;
+      const dx = e.clientX - startX;
+      targetScroller.scrollLeft = startScrollLeft - dx;
+      e.preventDefault();
+    };
+
+    const endPan = (e) => {
+      if (!isPanning) return;
+      if (e && panPointerId != null && e.pointerId !== panPointerId) return;
+      isPanning = false;
+      const pid = e?.pointerId;
+      panPointerId = null;
+      targetScroller = null;
+      try { if (pid != null) containerEl.releasePointerCapture(pid); } catch {}
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // Restore page scroll styles
+      document.documentElement.style.overflow = prevHtmlOverflow;
+      document.body.style.overflow = prevBodyOverflow;
+      document.body.style.overscrollBehavior = prevBodyOverscroll;
+      // Remove overlay if present
+      if (overlayEl && overlayEl.parentNode) {
+        try {
+          overlayEl.parentNode.removeChild(overlayEl);
+        } catch {}
+      }
+      overlayEl = null;
+    };
+
+    const onAuxClick = (e) => {
+      if (e.button !== 1) return;
+      if (!withinContainer(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    document.addEventListener('pointerdown', onPointerDown, { capture: true });
+    document.addEventListener('pointermove', onPointerMove, { capture: true });
+    document.addEventListener('pointerup', endPan, { capture: true });
+    document.addEventListener('pointercancel', endPan, { capture: true });
+    document.addEventListener('auxclick', onAuxClick, { capture: true });
+    const onClickBlockDefault = (e) => {
+      if (e.button !== 1) return;
+      if (!withinContainer(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    document.addEventListener('click', onClickBlockDefault, { capture: true });
+    // Block native middle-click autoscroll/new-tab via mousedown as well
+    const onMouseDownBlockDefault = (e) => {
+      if (e.button !== 1) return;
+      if (!withinContainer(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onMouseUpBlockDefault = (e) => {
+      if (e.button !== 1) return;
+      if (!withinContainer(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    document.addEventListener('mousedown', onMouseDownBlockDefault, { capture: true });
+    document.addEventListener('mouseup', onMouseUpBlockDefault, { capture: true });
+
+    // Mouse fallback if Pointer Events not available or misbehaving
+    const hasPointerEvents = typeof window !== 'undefined' && 'PointerEvent' in window;
+    let mouseFallbackBound = false;
+    const onMouseDown = (e) => {
+      if (isPanning) return;
+      if (e.button !== 1 && !(e.buttons & 4)) return;
+      if (!withinContainer(e)) return;
+      const scroller = chatStackRef.current;
+      if (!scroller) return;
+      isPanning = true;
+      targetScroller = scroller;
+      startX = e.clientX;
+      startScrollLeft = scroller.scrollLeft;
+      e.preventDefault();
+      document.body.style.cursor = 'grabbing';
+      document.body.style.userSelect = 'none';
+    };
+    const onMouseMove = (e) => {
+      if (!isPanning || !targetScroller) return;
+      const dx = e.clientX - startX;
+      targetScroller.scrollLeft = startScrollLeft - dx;
+      e.preventDefault();
+    };
+    const onMouseUp = () => endPan();
+    if (!hasPointerEvents) {
+      containerEl.addEventListener('mousedown', onMouseDown, { capture: true });
+      window.addEventListener('mousemove', onMouseMove, { capture: true });
+      window.addEventListener('mouseup', onMouseUp, { capture: true });
+      mouseFallbackBound = true;
+    }
+
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, { capture: true });
+      document.removeEventListener('pointermove', onPointerMove, { capture: true });
+      document.removeEventListener('pointerup', endPan, { capture: true });
+      document.removeEventListener('pointercancel', endPan, { capture: true });
+      document.removeEventListener('auxclick', onAuxClick, { capture: true });
+      document.removeEventListener('click', onClickBlockDefault, { capture: true });
+      document.removeEventListener('mousedown', onMouseDownBlockDefault, { capture: true });
+      document.removeEventListener('mouseup', onMouseUpBlockDefault, { capture: true });
+      if (mouseFallbackBound) {
+        containerEl.removeEventListener('mousedown', onMouseDown, { capture: true });
+        window.removeEventListener('mousemove', onMouseMove, { capture: true });
+        window.removeEventListener('mouseup', onMouseUp, { capture: true });
+      }
+      if (overlayEl && overlayEl.parentNode) {
+        try { overlayEl.parentNode.removeChild(overlayEl); } catch {}
+        overlayEl = null;
+      }
+      // Ensure state cleanup
+      isPanning = false;
+      panPointerId = null;
+      targetScroller = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     };
   }, []);
 
@@ -302,6 +514,7 @@ export default function DemoChatApp({ fullscreen = false }) {
   return (
     <div
       className={`demo-embed ${fullscreen && isMobile ? 'mobile-demo' : ''}`}
+      ref={containerRef}
       style={{
         height: fullscreen ? '100vh' : 560,
         border: fullscreen ? 'none' : '1px solid #22252c',
@@ -330,6 +543,8 @@ export default function DemoChatApp({ fullscreen = false }) {
               onInputFocus={scrollToThread}
               prefillText={resolvePrefillThreadId(nextPrefill?.threadId) === threadId ? nextPrefill?.text : undefined}
               prefillStamp={resolvePrefillThreadId(nextPrefill?.threadId) === threadId ? nextPrefillStamp : 0}
+              quoteText={nextQuote?.threadId === threadId ? nextQuote?.text : undefined}
+              quoteStamp={nextQuote?.threadId === threadId ? nextQuoteStamp : 0}
               swipeHint={fullscreen && showSwipeHint && chatStack.length > 1 && threadId === swipeHintThreadId}
             />
           );
@@ -344,6 +559,7 @@ export default function DemoChatApp({ fullscreen = false }) {
       <SelectionPopover
         selectionPopover={selectionPopover}
         onDiscuss={forkConversation}
+        onQuote={handleQuoteInsert}
       />
 
       <HighlightPopover
